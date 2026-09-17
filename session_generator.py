@@ -1,8 +1,8 @@
 import asyncio
 from telethon import TelegramClient
 
-API_ID = 12345678
-API_HASH = "BU_YERGA_API_HASH"
+API_ID = 5923818664
+API_HASH = "8f6f39d739c367dea66fbe3a137aff0a"
 
 async def main():
     client = TelegramClient(
