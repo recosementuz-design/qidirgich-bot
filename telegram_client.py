@@ -1,136 +1,102 @@
-import logging
-
 from telethon import TelegramClient
-from telethon.errors import (
-    UsernameInvalidError,
-    UsernameNotOccupiedError,
-    RPCError
-)
-from telethon.tl.types import User, Channel
+from telethon.sessions import StringSession
+from telethon.errors import RPCError
 
-from config import API_ID, API_HASH
+from config import API_ID, API_HASH, STRING_SESSION
 
 
-logger = logging.getLogger(__name__)
+client = None
 
 
-client = TelegramClient(
-    "qidirgich_session",
-    API_ID,
-    API_HASH
-)
+async def start_user_client():
 
+    global client
 
-async def start_client(bot_token):
+    if not STRING_SESSION:
 
-    await client.start(
-        bot_token=bot_token
+        raise RuntimeError(
+            "STRING_SESSION topilmadi. "
+            "Railway Variables ga STRING_SESSION qo'ying."
+        )
+
+    client = TelegramClient(
+        StringSession(STRING_SESSION),
+        API_ID,
+        API_HASH
     )
+
+    await client.connect()
+
+    if not await client.is_user_authorized():
+
+        raise RuntimeError(
+            "STRING_SESSION yaroqsiz yoki "
+            "Telegram avtorizatsiyasi tugagan."
+        )
 
     me = await client.get_me()
 
-    logger.info(
-        "Telegram client connected: @%s",
-        getattr(me, "username", None)
+    print(
+        "MTProto user connected:",
+        getattr(me, "username", None),
+        me.id
     )
 
+    return client
 
-async def resolve_username(username):
 
-    username = username.strip()
+async def resolve_query(value):
 
-    if username.startswith("@"):
-        username = username[1:]
+    value = value.strip()
 
-    if username.startswith("https://t.me/"):
-        username = username.replace(
-            "https://t.me/",
-            "",
-            1
-        )
+    if value.startswith("https://t.me/"):
 
-    if username.startswith("t.me/"):
-        username = username.replace(
-            "t.me/",
-            "",
-            1
-        )
+        value = value.rstrip("/")
+        value = value.split("/")[-1]
+
+    if value.startswith("t.me/"):
+
+        value = value.rstrip("/")
+        value = value.split("/")[-1]
+
+    if value.startswith("@"):
+
+        value = value[1:]
 
     try:
 
-        entity = await client.get_entity(
-            username
-        )
+        if value.isdigit():
+
+            entity = await client.get_entity(
+                int(value)
+            )
+
+        else:
+
+            entity = await client.get_entity(
+                value
+            )
 
         return entity, None
-
-    except UsernameInvalidError:
-
-        return None, "Username noto'g'ri."
-
-    except UsernameNotOccupiedError:
-
-        return None, "Bunday username topilmadi."
 
     except RPCError as e:
 
-        logger.exception(e)
-
-        return None, "Telegram API xatosi."
-
-    except Exception as e:
-
-        logger.exception(e)
-
-        return None, "Qidiruvda xatolik."
-
-
-async def resolve_id(user_id):
-
-    try:
-
-        user_id = int(user_id)
-
-        entity = await client.get_entity(
-            user_id
-        )
-
-        return entity, None
-
-    except Exception as e:
-
-        logger.exception(e)
-
         return None, (
-            "Bu ID bo'yicha Telegram entity "
-            "mavjud emas yoki unga kirish imkoniyati yo'q."
+            f"Telegram API xatosi: "
+            f"{type(e).__name__}"
         )
-
-
-async def get_profile_photo(user):
-
-    try:
-
-        photos = await client.get_profile_photos(
-            user,
-            limit=10
-        )
-
-        return photos
 
     except Exception as e:
 
-        logger.exception(e)
-
-        return []
+        return None, str(e)
 
 
-async def download_profile_photo(user):
+async def profile_photo(entity):
 
     try:
 
         photos = await client.get_profile_photos(
-            user,
+            entity,
             limit=1
         )
 
@@ -142,18 +108,6 @@ async def download_profile_photo(user):
             file=bytes
         )
 
-    except Exception as e:
-
-        logger.exception(e)
+    except Exception:
 
         return None
-
-
-def is_user(entity):
-
-    return isinstance(entity, User)
-
-
-def is_channel(entity):
-
-    return isinstance(entity, Channel)
