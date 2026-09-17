@@ -1,5 +1,5 @@
-import logging
 import asyncio
+import logging
 
 from telegram import (
     Update,
@@ -18,73 +18,39 @@ from telegram.ext import (
     filters
 )
 
-from config import BOT_TOKEN
+from config import (
+    BOT_TOKEN,
+    ADMIN_TELEGRAM_ID
+)
 
 from database import Database
 
 from telegram_client import (
-    client,
-    start_client,
-    resolve_username,
-    resolve_id,
-    download_profile_photo
-)
-
-from search_engine import (
-    search_query,
-    build_report
+    start_user_client,
+    resolve_query,
+    profile_photo
 )
 
 from indexer import index_source
 
+from search_engine import search_user
+
 
 logging.basicConfig(
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    level=logging.INFO
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
 )
 
-logger = logging.getLogger(
-    "qidirgich"
-)
+log = logging.getLogger("qidirgich")
 
 
 db = Database()
 
 
-# ============================================================
-# ADMIN
-# ============================================================
-
-ADMIN_IDS = set()
-
-admin_env = None
-
-try:
-
-    import os
-
-    admin_env = os.getenv(
-        "ADMIN_TELEGRAM_ID"
-    )
-
-    if admin_env:
-        ADMIN_IDS.add(
-            int(admin_env)
-        )
-
-except Exception:
-
-    pass
-
-
 def is_admin(user_id):
 
-    return user_id in ADMIN_IDS
+    return user_id == ADMIN_TELEGRAM_ID
 
-
-# ============================================================
-# START
-# ============================================================
 
 async def start(
     update: Update,
@@ -92,18 +58,21 @@ async def start(
 ):
 
     keyboard = [
+
         [
             InlineKeyboardButton(
                 "🔎 Qidirish",
                 callback_data="search"
             )
         ],
+
         [
             InlineKeyboardButton(
                 "ℹ️ Yordam",
                 callback_data="help"
             )
         ]
+
     ]
 
     if is_admin(
@@ -119,60 +88,50 @@ async def start(
             ]
         )
 
-    text = (
-        "🔎 <b>QIDIRGICH</b>\n\n"
-        "Telegramdagi ochiq va botga "
-        "ruxsat etilgan ma'lumotlarni "
-        "qidirish tizimi.\n\n"
-        "Username yuboring:\n"
-        "<code>@username</code>\n\n"
-        "Yoki Telegram ID:\n"
-        "<code>123456789</code>"
-    )
-
     await update.message.reply_text(
-        text,
+
+        "🔎 <b>QIDIRGICH</b>\n\n"
+
+        "Telegram username yoki ID yuboring.\n\n"
+
+        "Masalan:\n"
+        "<code>@username</code>\n"
+        "<code>123456789</code>\n\n"
+
+        "Qidiruv faqat Telegram orqali "
+        "ko'rish mumkin bo'lgan ma'lumotlar "
+        "doirasida ishlaydi.",
+
         parse_mode=ParseMode.HTML,
+
         reply_markup=InlineKeyboardMarkup(
             keyboard
         )
     )
 
 
-# ============================================================
-# HELP
-# ============================================================
-
-async def help_command(
+async def help_cmd(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
 
-    text = (
-        "ℹ️ <b>QIDIRGICH YORDAM</b>\n\n"
-        "🔎 Username yoki Telegram ID yuboring.\n\n"
-        "Misol:\n"
-        "<code>@telegram</code>\n"
-        "<code>123456789</code>\n\n"
-        "Bot mavjud bo'lgan public va "
-        "indekslangan Telegram ma'lumotlarini "
-        "ko'rsatadi.\n\n"
-        "🔐 Private chatlar va boshqa "
-        "foydalanuvchilarning kontaktlari "
-        "olinmaydi."
-    )
-
     await update.message.reply_text(
-        text,
+
+        "🔎 <b>QIDIRISH</b>\n\n"
+
+        "Username yoki Telegram ID yuboring.\n\n"
+
+        "Admin public guruh yoki kanalni "
+        "indekslashi mumkin.\n\n"
+
+        "Private chatlar, kontaktlar va "
+        "ruxsatsiz yopiq ma'lumotlar olinmaydi.",
+
         parse_mode=ParseMode.HTML
     )
 
 
-# ============================================================
-# SEARCH
-# ============================================================
-
-async def handle_search(
+async def search(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
@@ -184,82 +143,194 @@ async def handle_search(
     if not query:
         return
 
+    if context.user_data.get(
+        "waiting_source"
+    ):
+        return
+
     status = await update.message.reply_text(
-        "🔎 <b>QIDIRILMOQDA...</b>\n\n"
-        f"<code>{query}</code>",
-        parse_mode=ParseMode.HTML
+        "🔎 Qidirilmoqda..."
     )
 
-    user, error = await search_query(
+    result = await search_user(
+        db,
         query
     )
 
-    if error:
+    if not result["ok"]:
 
         await status.edit_text(
-            f"❌ {error}"
+            "❌ Topilmadi yoki Telegram "
+            "ushbu ma'lumotga kirishga "
+            "ruxsat bermadi.\n\n"
+            + result["error"]
         )
 
         return
 
-    try:
+    entity = result["entity"]
 
-        await db.save_user(
-            user
+    messages = result["messages"]
+
+    first_name = (
+        getattr(
+            entity,
+            "first_name",
+            None
+        )
+        or ""
+    )
+
+    last_name = (
+        getattr(
+            entity,
+            "last_name",
+            None
+        )
+        or ""
+    )
+
+    name = (
+        f"{first_name} {last_name}"
+    ).strip()
+
+    if not name:
+
+        name = (
+            getattr(
+                entity,
+                "title",
+                None
+            )
+            or "Noma'lum"
         )
 
-        report = await build_report(
-            user,
-            db
+    username = getattr(
+        entity,
+        "username",
+        None
+    )
+
+    text = (
+        "🔎 <b>QIDIRGICH NATIJASI</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"👤 <b>{name}</b>\n"
+        f"🆔 <code>{entity.id}</code>\n"
+    )
+
+    if username:
+
+        text += (
+            f"🔗 @{username}\n"
         )
 
-        await db.save_search(
-            update.effective_user.id,
-            query,
-            1
+    bio = getattr(
+        entity,
+        "about",
+        None
+    )
+
+    if bio:
+
+        text += (
+            f"📝 {bio[:500]}\n"
         )
 
-        keyboard = [
-            [
-                InlineKeyboardButton(
-                    "🖼 Profil rasmi",
-                    callback_data=f"photo:{user.id}"
+    if getattr(
+        entity,
+        "verified",
+        False
+    ):
+
+        text += (
+            "☑️ Verified: ha\n"
+        )
+
+    if getattr(
+        entity,
+        "premium",
+        False
+    ):
+
+        text += (
+            "⭐ Premium: ha\n"
+        )
+
+    if getattr(
+        entity,
+        "bot",
+        False
+    ):
+
+        text += (
+            "🤖 Bot: ha\n"
+        )
+
+    text += (
+        "\n💬 <b>Indekslangan xabarlar:</b> "
+        f"{len(messages)}\n"
+    )
+
+    if messages:
+
+        for row in messages[:10]:
+
+            source = (
+                row["title"]
+                or row["source_username"]
+                or "Noma'lum"
+            )
+
+            message_text = (
+                row["message_text"]
+                or ""
+            ).replace(
+                "\n",
+                " "
+            )
+
+            text += (
+                f"\n• <b>{source}</b>\n"
+                f"  {message_text[:180]}\n"
+            )
+
+    else:
+
+        text += (
+            "\nℹ️ Ushbu foydalanuvchi bo'yicha "
+            "indekslangan public xabar topilmadi."
+        )
+
+    keyboard = [
+
+        [
+            InlineKeyboardButton(
+                "🖼 Profil rasmi",
+                callback_data=(
+                    f"photo:{entity.id}"
                 )
-            ],
-            [
-                InlineKeyboardButton(
-                    "💬 Xabarlar",
-                    callback_data=f"messages:{user.id}"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "🔎 Yangi qidiruv",
-                    callback_data="search"
-                )
-            ]
+            )
         ]
 
-        await status.edit_text(
-            report,
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(
-                keyboard
-            )
+    ]
+
+    await db.save_search(
+        update.effective_user.id,
+        query,
+        len(messages)
+    )
+
+    await status.edit_text(
+
+        text,
+
+        parse_mode=ParseMode.HTML,
+
+        reply_markup=InlineKeyboardMarkup(
+            keyboard
         )
+    )
 
-    except Exception as e:
-
-        logger.exception(e)
-
-        await status.edit_text(
-            "❌ Natijani tayyorlashda xatolik."
-        )
-
-
-# ============================================================
-# CALLBACK
-# ============================================================
 
 async def callbacks(
     update: Update,
@@ -270,7 +341,7 @@ async def callbacks(
 
     await query.answer()
 
-    data = query.data or ""
+    data = query.data
 
     if data == "search":
 
@@ -283,10 +354,7 @@ async def callbacks(
     if data == "help":
 
         await query.message.reply_text(
-            "🔎 Username yoki ID yuboring.\n\n"
-            "Masalan:\n"
-            "@username\n"
-            "123456789"
+            "Username yoki Telegram ID yuboring."
         )
 
         return
@@ -297,31 +365,32 @@ async def callbacks(
             query.from_user.id
         ):
 
-            await query.answer(
-                "Ruxsat yo'q.",
-                show_alert=True
-            )
-
             return
 
         keyboard = [
+
             [
                 InlineKeyboardButton(
-                    "➕ Manba qo'shish",
-                    callback_data="admin_add_source"
+                    "➕ Public manba qo'shish",
+                    callback_data="add_source"
                 )
             ],
+
             [
                 InlineKeyboardButton(
                     "📊 Statistika",
-                    callback_data="admin_stats"
+                    callback_data="stats"
                 )
             ]
+
         ]
 
         await query.message.reply_text(
+
             "👑 <b>ADMIN PANEL</b>",
+
             parse_mode=ParseMode.HTML,
+
             reply_markup=InlineKeyboardMarkup(
                 keyboard
             )
@@ -329,35 +398,36 @@ async def callbacks(
 
         return
 
-    if data == "admin_stats":
+    if data == "stats":
 
         if not is_admin(
             query.from_user.id
         ):
+
             return
 
         stats = await db.stats()
 
-        text = (
-            "📊 <b>QIDIRGICH STATISTIKA</b>\n\n"
+        await query.message.reply_text(
+
+            "📊 <b>STATISTIKA</b>\n\n"
+
             f"👤 Users: {stats['users']}\n"
             f"📚 Sources: {stats['sources']}\n"
             f"💬 Messages: {stats['messages']}\n"
-            f"🔎 Searches: {stats['searches']}"
-        )
+            f"🔎 Searches: {stats['searches']}",
 
-        await query.message.reply_text(
-            text,
             parse_mode=ParseMode.HTML
         )
 
         return
 
-    if data == "admin_add_source":
+    if data == "add_source":
 
         if not is_admin(
             query.from_user.id
         ):
+
             return
 
         context.user_data[
@@ -365,250 +435,168 @@ async def callbacks(
         ] = True
 
         await query.message.reply_text(
-            "➕ Public guruh yoki kanal username'ini yuboring.\n\n"
+
+            "➕ Public guruh yoki kanal "
+            "username'ini yuboring.\n\n"
+
             "Masalan:\n"
-            "<code>@examplegroup</code>",
+            "<code>@example</code>",
+
             parse_mode=ParseMode.HTML
         )
 
         return
 
-    if data.startswith("photo:"):
+    if data.startswith(
+        "photo:"
+    ):
 
-        try:
+        user_id = data.split(
+            ":",
+            1
+        )[1]
 
-            user_id = int(
-                data.split(":")[1]
-            )
-
-        except Exception:
-
-            return
-
-        user, error = await resolve_id(
+        entity, error = await resolve_query(
             user_id
         )
 
         if error:
 
             await query.message.reply_text(
-                "❌ Profilni qayta olishning imkoni bo'lmadi."
+                "❌ Profil topilmadi."
             )
 
             return
 
-        photo = await download_profile_photo(
-            user
+        photo = await profile_photo(
+            entity
         )
 
         if not photo:
 
             await query.message.reply_text(
-                "🖼 Profil rasmi mavjud emas yoki "
-                "uni olishga imkon yo'q."
+                "🖼 Profil rasmi olinmadi."
             )
 
             return
 
         await query.message.reply_photo(
-            photo=photo,
-            caption=(
-                f"👤 {getattr(user, 'first_name', '')}\n"
-                f"🔗 @{getattr(user, 'username', '')}\n"
-                f"🆔 {user.id}"
-            )
-        )
-
-        return
-
-    if data.startswith("messages:"):
-
-        try:
-
-            user_id = int(
-                data.split(":")[1]
-            )
-
-        except Exception:
-
-            return
-
-        messages = await db.search_messages_by_user(
-            user_id,
-            20
-        )
-
-        if not messages:
-
-            await query.message.reply_text(
-                "💬 Bu user bo'yicha "
-                "indekslangan xabar topilmadi."
-            )
-
-            return
-
-        text = (
-            "💬 <b>TOPILGAN OCHIQ XABARLAR</b>\n\n"
-        )
-
-        for message in messages:
-
-            source = (
-                message["title"]
-                or message["source_username"]
-                or "Noma'lum"
-            )
-
-            msg_text = (
-                message["message_text"]
-                or ""
-            )
-
-            msg_text = msg_text.replace(
-                "\n",
-                " "
-            )
-
-            if len(msg_text) > 300:
-
-                msg_text = (
-                    msg_text[:300]
-                    + "..."
-                )
-
-            text += (
-                f"👥 <b>{source}</b>\n"
-                f"💬 {msg_text}\n"
-            )
-
-            if message["public_url"]:
-
-                text += (
-                    f"🔗 {message['public_url']}\n"
-                )
-
-            text += "\n"
-
-        await query.message.reply_text(
-            text,
-            parse_mode=ParseMode.HTML
+            photo=photo
         )
 
 
-# ============================================================
-# ADMIN SOURCE HANDLER
-# ============================================================
-
-async def handle_admin_source(
+async def message_handler(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
 
-    if not is_admin(
-        update.effective_user.id
+    if (
+        is_admin(
+            update.effective_user.id
+        )
+        and context.user_data.get(
+            "waiting_source"
+        )
     ):
 
-        return
+        context.user_data[
+            "waiting_source"
+        ] = False
 
-    if not context.user_data.get(
-        "waiting_source"
-    ):
+        raw = (
+            update.message.text or ""
+        ).strip()
 
-        return
-
-    context.user_data[
-        "waiting_source"
-    ] = False
-
-    source_username = (
-        update.message.text or ""
-    ).strip()
-
-    if source_username.startswith("@"):
-
-        source_username = (
-            source_username[1:]
+        entity, error = await resolve_query(
+            raw
         )
 
-    status = await update.message.reply_text(
-        "🔎 Manba tekshirilmoqda..."
-    )
+        if error:
 
-    try:
+            await update.message.reply_text(
+                "❌ Manba topilmadi.\n\n"
+                + error
+            )
 
-        entity = await client.get_entity(
-            source_username
-        )
+            return
 
-        title = getattr(
+        if not getattr(
             entity,
             "title",
             None
-        ) or getattr(
-            entity,
-            "first_name",
-            None
-        ) or source_username
+        ):
 
-        source_type = (
-            "channel"
-            if getattr(
-                entity,
-                "broadcast",
-                False
+            await update.message.reply_text(
+
+                "❌ Public guruh yoki kanal "
+                "username'ini yuboring."
             )
-            else "group"
-        )
 
-        source = await db.add_source(
-            telegram_id=entity.id,
-            username=source_username,
-            title=title,
-            source_type=source_type
-        )
+            return
 
-        source_id = source["id"]
+        try:
 
-        await status.edit_text(
-            "📥 <b>INDekSLASH BOSHLANDI</b>\n\n"
-            f"Manba: <b>{title}</b>\n"
-            "Bu jarayon biroz vaqt olishi mumkin...",
-            parse_mode=ParseMode.HTML
-        )
+            source = await db.upsert_source(
+                entity
+            )
 
-        count = await index_source(
-            db=db,
-            source_entity=entity,
-            source_id=source_id,
-            limit=1000
-        )
+            status = await update.message.reply_text(
+                "📥 Indekslash boshlandi..."
+            )
 
-        await update.message.reply_text(
-            "✅ <b>INDEX TAYYOR</b>\n\n"
-            f"Manba: {title}\n"
-            f"Saqlangan xabarlar: {count}",
-            parse_mode=ParseMode.HTML
-        )
+            count = await index_source(
+                db,
+                entity,
+                source["id"],
+                limit=1000
+            )
 
-    except Exception as e:
+            await status.edit_text(
 
-        logger.exception(e)
+                "✅ <b>INDEX TAYYOR</b>\n\n"
 
-        await status.edit_text(
-            f"❌ Manbani indekslashda xatolik:\n{e}"
-        )
+                f"📚 {source['title']}\n"
+                f"💬 Xabarlar: {count}",
 
+                parse_mode=ParseMode.HTML
+            )
 
-# ============================================================
-# STARTUP
-# ============================================================
+        except Exception as e:
+
+            log.exception(
+                "Index error"
+            )
+
+            await update.message.reply_text(
+
+                "❌ Indekslashda xatolik:\n"
+                f"{type(e).__name__}: {e}"
+            )
+
+        return
+
+    await search(
+        update,
+        context
+    )
+
 
 async def main():
 
+    print(
+        "PostgreSQL ulanishi..."
+    )
+
     await db.connect()
 
-    await start_client(
-        BOT_TOKEN
+    print(
+        "MTProto user session ulanishi..."
+    )
+
+    await start_user_client()
+
+    print(
+        "Bot ishga tushmoqda..."
     )
 
     application = (
@@ -628,7 +616,7 @@ async def main():
     application.add_handler(
         CommandHandler(
             "help",
-            help_command
+            help_cmd
         )
     )
 
@@ -642,20 +630,8 @@ async def main():
         MessageHandler(
             filters.TEXT
             & ~filters.COMMAND,
-            handle_admin_source
+            message_handler
         )
-    )
-
-    application.add_handler(
-        MessageHandler(
-            filters.TEXT
-            & ~filters.COMMAND,
-            handle_search
-        )
-    )
-
-    logger.info(
-        "QIDIRGICH ISHGA TUSHDI"
     )
 
     await application.initialize()
@@ -663,6 +639,18 @@ async def main():
     await application.start()
 
     await application.updater.start_polling()
+
+    print(
+        "================================"
+    )
+
+    print(
+        "QIDIRGICH ISHGA TUSHDI"
+    )
+
+    print(
+        "================================"
+    )
 
     try:
 
@@ -679,8 +667,6 @@ async def main():
         await application.stop()
 
         await application.shutdown()
-
-        await client.disconnect()
 
         await db.close()
 
